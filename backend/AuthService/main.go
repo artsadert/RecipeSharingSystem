@@ -17,11 +17,18 @@ import (
 )
 
 type users struct {
-	gorm.Model
-	ID               uint      `gorm:"primarykey;size:16"`
-	username         string    `gorm:"size:100"`
-	hashed_password  string    `form:"hashed_password"`
-	registrationDate time.Time `form:"registrationDate"`
+	ID            uint   `gorm:"primarykey;size:16"`
+	Username      string `gorm:"size:100"`
+	Password_hash string
+	Iat           time.Time
+}
+
+type TokenJWT struct {
+	Username      string    `json:"username"`
+	Password_hash string    `json:"password_hash"`
+	Id            uint      `json:"id"`
+	Iat           time.Time `json:"iat"`
+	jwt.RegisteredClaims
 }
 
 func Registrate(c *gin.Context, secret_key string, db_url string) {
@@ -29,9 +36,10 @@ func Registrate(c *gin.Context, secret_key string, db_url string) {
 	if err != nil {
 		log.Fatal("error connecing to db")
 	}
+
 	username := c.PostForm("username")
 	password := c.PostForm("password")
-	fmt.Println(username)
+
 	if username == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"err": "no username is given"})
 		return
@@ -40,27 +48,27 @@ func Registrate(c *gin.Context, secret_key string, db_url string) {
 		c.JSON(http.StatusBadRequest, gin.H{"err": "no password is given"})
 		return
 	}
+
 	registrationDate := time.Now()
 
 	h := sha256.New()
 	h.Write([]byte(username + password))
-	password_hash := h.Sum(nil)
+	password_hash := fmt.Sprintf("%x", h.Sum(nil))
 
 	// create registration in db
-	db.Create(&users{username: username, hashed_password: string(password_hash), registrationDate: registrationDate})
+	db.Create(&users{Username: username, Password_hash: password_hash, Iat: registrationDate})
 
 	user := users{}
 	db.Last(&user)
 	id := user.ID
-	fmt.Println(id, user.username, user.registrationDate)
 	// create jwt token
+	fmt.Println(username, password_hash, id, registrationDate.AddDate(0, 1, 0))
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"username":      username,
 		"password_hash": password_hash,
 		"id":            id,
 		"iat":           registrationDate.AddDate(0, 1, 0),
 	})
-	//fmt.Println(username, string(password_hash), id, registrationDate.AddDate(0, 1, 0))
 
 	jwtTOKEN, err := token.SignedString([]byte(secret_key))
 
@@ -78,10 +86,10 @@ func Authentification(c *gin.Context, secret_key string, db_url string) {
 	if err != nil {
 		log.Fatal("error connecing to db")
 	}
+
 	username := c.PostForm("username")
 	password := c.PostForm("password")
 	if username == "" {
-		fmt.Println(username)
 		c.JSON(http.StatusBadRequest, gin.H{"err": "no username is given"})
 		return
 	}
@@ -89,23 +97,21 @@ func Authentification(c *gin.Context, secret_key string, db_url string) {
 		c.JSON(http.StatusBadRequest, gin.H{"err": "no password is given"})
 		return
 	}
+
 	registrationDate := time.Now()
 
 	h := sha256.New()
 	h.Write([]byte(username + password))
-	password_hash := h.Sum(nil)
+	password_hash := fmt.Sprintf("%x", h.Sum(nil))
 
 	//check if user is valid in db
 	user := users{}
-	result := db.Where(&users{username: username, hashed_password: string(password_hash)}).First(&user)
+	result := db.Where(&users{Username: username, Password_hash: password_hash, ID: user.ID}).First(&user)
+	fmt.Println(username, password_hash, user.ID)
 
-	var tests []users
-	test_err := db.Find(&tests)
-	for _, test := range tests {
-		fmt.Println(test.hashed_password, test.ID, test.username, errors.Is(test_err.Error, gorm.ErrRecordNotFound))
-	}
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		c.JSON(http.StatusBadRequest, gin.H{"err": "no such user"})
+		return
 	}
 	id := user.ID
 
@@ -132,8 +138,16 @@ func CheckIsValidJWT(c *gin.Context, secret_key string, db_url string) {
 	if err != nil {
 		log.Fatal("error connecing to db")
 	}
+
 	token := c.GetHeader("jwtTOKEN")
-	token_parsed, err := jwt.Parse(token, func(token_args *jwt.Token) (interface{}, error) {
+	if token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"err": "no token was presented",
+		})
+		return
+	}
+
+	token_parsed, err := jwt.ParseWithClaims(token, &TokenJWT{}, func(token_args *jwt.Token) (interface{}, error) {
 		if _, ok := token_args.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token_args.Header["alg"])
 		}
@@ -144,25 +158,33 @@ func CheckIsValidJWT(c *gin.Context, secret_key string, db_url string) {
 		c.JSON(http.StatusBadRequest, gin.H{"err": err})
 	}
 
-	if claims, ok := token_parsed.Claims.(jwt.MapClaims); ok {
+	if claims, ok := token_parsed.Claims.(*TokenJWT); ok {
 
 		now := time.Now()
-		if now.Before(claims["iat"].(time.Time)) {
+		//iat, err := time.Parse(time.RFC3339Nano, claims.Iat)
+
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"err": "wrong time format", "errlog": err.Error()})
+			return
+		}
+		if now.After(claims.Iat) {
 			c.JSON(http.StatusBadRequest, gin.H{"err": "jwt expired"})
+			return
 		}
 
-		username := claims["username"]
-		password_hash := claims["password_hash"]
-		id := claims["id"]
+		username := claims.Username
+		password_hash := claims.Password_hash
+		id := claims.Id
 		registrationDate := time.Now()
 
 		//check is user is active in db
-
 		user := users{}
-		err := db.Where(&users{username: username.(string), hashed_password: password_hash.(string), ID: id.(uint)}).First(&user).Error
+		result := db.Where(&users{Username: username, Password_hash: password_hash, ID: id}).First(&user)
+		fmt.Println(username, password_hash, id)
 
-		if err != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusBadRequest, gin.H{"err": "jwt is not valid; user is not definded"})
+			return
 		}
 
 		// create jwt token
@@ -184,7 +206,7 @@ func CheckIsValidJWT(c *gin.Context, secret_key string, db_url string) {
 		})
 
 	} else {
-		c.JSON(http.StatusBadRequest, gin.H{})
+		c.JSON(http.StatusBadRequest, gin.H{"err": "parsed badly"})
 	}
 
 }
@@ -205,7 +227,6 @@ func main() {
 		log.Fatal("error connecing to db")
 	}
 	db.AutoMigrate(&users{})
-	db.Delete(&users{}).Commit()
 
 	r := gin.Default()
 
