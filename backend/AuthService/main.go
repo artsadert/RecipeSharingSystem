@@ -62,7 +62,6 @@ func Registrate(c *gin.Context, secret_key string, db_url string) {
 	db.Last(&user)
 	id := user.ID
 	// create jwt token
-	fmt.Println(username, password_hash, id, registrationDate.AddDate(0, 1, 0))
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"username":      username,
 		"password_hash": password_hash,
@@ -107,7 +106,6 @@ func Authentification(c *gin.Context, secret_key string, db_url string) {
 	//check if user is valid in db
 	user := users{}
 	result := db.Where(&users{Username: username, Password_hash: password_hash, ID: user.ID}).First(&user)
-	fmt.Println(username, password_hash, user.ID)
 
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		c.JSON(http.StatusBadRequest, gin.H{"err": "no such user"})
@@ -180,7 +178,6 @@ func CheckIsValidJWT(c *gin.Context, secret_key string, db_url string) {
 		//check is user is active in db
 		user := users{}
 		result := db.Where(&users{Username: username, Password_hash: password_hash, ID: id}).First(&user)
-		fmt.Println(username, password_hash, id)
 
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusBadRequest, gin.H{"err": "jwt is not valid; user is not definded"})
