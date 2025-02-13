@@ -178,6 +178,7 @@ func CheckIsValidJWT(c *gin.Context, secret_key string, db_url string) {
 		//check is user is active in db
 		user := users{}
 		result := db.Where(&users{Username: username, Password_hash: password_hash, ID: id}).First(&user)
+		log.Println(user.ID)
 
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusBadRequest, gin.H{"err": "jwt is not valid; user is not definded"})
@@ -218,12 +219,20 @@ func main() {
 
 	secret_key := os.Getenv("SECRET_KEY")
 
-	db_url := fmt.Sprintf("host=localhost user=%s password=%s dbname=%s port=5432", os.Getenv("POSTGRES_USER"), os.Getenv("POSTGRES_PASSWORD"), os.Getenv("POSTGRES_DB"))
+	db_url := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=5432", os.Getenv("POSTGRES_HOST"), os.Getenv("POSTGRES_USER"), os.Getenv("POSTGRES_PASSWORD"), os.Getenv("POSTGRES_DB"))
 	db, err := gorm.Open(postgres.Open(db_url), &gorm.Config{})
 	if err != nil {
 		log.Fatal("error connecing to db")
+		return
 	}
 	db.AutoMigrate(&users{})
+	var userss []users
+	db.Find(&userss)
+	for _, user := range userss {
+		log.Println("delegin user", user.ID, user.Username, user.Password_hash, user.Iat)
+		db.Delete(&user)
+	}
+	log.Println("end deleting")
 
 	r := gin.Default()
 
